@@ -1,0 +1,16 @@
+*.idea
+__pycache__
+*.zip
+flower_data
+*.h5
+*.pth
+*.pt
+*.jpg
+*.ckpt.*
+*.ckpt
+*.config
+*.gz
+*.onnx
+*.xml
+*.bin
+*.mapping
