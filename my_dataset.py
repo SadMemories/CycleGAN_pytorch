@@ -8,9 +8,9 @@ from torchvision import transforms
 
 
 IMG_EXTENSIONS = [
-    '.jpg', '.JPG', '.jpeg', '.JPEG',
-    '.png', '.PNG', '.ppm', '.PPM', '.bmp', '.BMP',
-    '.tif', '.TIF', '.tiff', '.TIFF',
+    'jpg', 'JPG', 'jpeg', 'JPEG',
+    'png', 'PNG', 'ppm', 'PPM', 'bmp', 'BMP',
+    'tif', 'TIF', 'tiff', 'TIFF',
 ]
 
 
@@ -23,7 +23,7 @@ def get_data(path):
 # 这个只针对训练过程 测试过程还没有写
 def get_transform(opt):
     trans = transforms.Compose([
-        transforms.Resize(opt.load_size, Image.CUBIC),
+        transforms.Resize(opt.load_size, transforms.InterpolationMode.BICUBIC),
         transforms.RandomCrop(opt.crop_size),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),

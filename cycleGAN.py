@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import collections
 import itertools
 from functools import partial
 from utils import ImagePool
@@ -25,7 +26,6 @@ class ResnetBlock(nn.Module):
         self.conv_block = nn.Sequential(*conv_block)
 
     def forward(self, x):
-
         return x + self.conv_block(x)
 
 
@@ -53,7 +53,7 @@ class ResnetGenerator(nn.Module):
                 down_last_c = mul_cur
 
         for i in range(blocks):
-            self.generator += [ResnetBlock(down_last_c, norm_layer)]
+            self.generator += [ResnetBlock(down_last_c * ngf, norm_layer)]
 
         up_layers = 2
         for i in range(up_layers):
@@ -127,18 +127,30 @@ class CycleGAN(nn.Module):
         self.netG_A = define_G(opt.in_c, opt.out_c, self.norm, opt.ngf).to(self.device)
         self.netG_B = define_G(opt.out_c, opt.in_c, self.norm, opt.ngf).to(self.device)
 
+        self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B']
+        self.visual_A = ['real_A', 'fake_B', 'rec_A']
+        self.visual_B = ['real_B', 'fake_A', 'rec_B']
+
         layer = 3
         if is_train:
             self.netD_A = define_D(opt.in_c, layer, self.norm, opt.ndf).to(self.device)
             self.netD_B = define_D(opt.out_c, layer, self.norm, opt.ndf).to(self.device)
 
         if is_train:
+            self.lambda_identity = 0.0
+            self.lambda_A = opt.lambda_A
+            self.lambda_B = opt.lambda_B
             if opt.lambda_identity > 0.0:
                 assert (opt.in_c == opt.out_c), "in_c and out_c must be equal when using the Identity loss"
+                self.lambda_identity = opt.lambda_identity
+                self.visual_A.append('idt_A')
+                self.visual_B.append('idt_B')
 
-            if self.gan_mode == 'lsgan':
+            self.visual_names = self.visual_A + self.visual_B  # 在训练时显示的图片
+
+            if opt.gan_mode == 'lsgan':
                 self.criterionGAN = nn.MSELoss()
-            elif self.gan_mode == 'vanilla':
+            elif opt.gan_mode == 'vanilla':
                 self.criterionGAN = nn.BCEWithLogitsLoss()
             else:
                 raise NotImplementedError('gan loss must be vanilla or lsgan!')
@@ -196,17 +208,74 @@ class CycleGAN(nn.Module):
             for param in net.parameters():
                 param.requires_grad = requires_grad
 
+    def get_current_visuals(self):
+        visuals = collections.OrderedDict()
+
+        for name in self.visual_names:
+            if isinstance(name, str):
+                visuals[name] = getattr(self, name)
+        return visuals
+
+    def get_current_losses(self):
+        losses = collections.OrderedDict()
+        for name in self.loss_names:
+            if isinstance(name, str):
+                losses[name] = float(getattr(self, 'loss_'+name))
+        return losses
+
     def backward_G(self):
         # 计算self.real_A与self.rec_A，self.real_B与self.rec_B的cycle损失，
         # 计算self.fake_B与标签为1的grand_truth, self.fake_A与标签为1的ground_truth之间的GAN损失
         # 如果self.opt.lambda_identity大于0，计算self.fake_B与self.real_A, self.fake_A与self.real_B的identity损失
-        pass
+        if self.lambda_identity > 0.0:
+            self.idt_A = self.netG_A(self.real_A)
+            self.idt_B = self.netG_B(self.real_B)
+
+            self.loss_idt_A = self.criterionIdentity(self.real_A, self.idt_A) * self.lambda_identity * self.lambda_A
+            self.loss_idt_B = self.criterionIdentity(self.real_B, self.idt_B) * self.lambda_identity * self.lambda_B
+        else:
+            self.loss_idt_A = 0.0
+            self.loss_idt_B = 0.0
+
+        self.loss_cycle_A = self.criterionCycle(self.real_A, self.rec_A) * self.lambda_A
+        self.loss_cycle_B = self.criterionCycle(self.real_B, self.rec_B) * self.lambda_B
+
+        d_a = self.netD_A(self.fake_B)
+        d_b = self.netD_B(self.fake_A)
+
+        gt_label_a = torch.tensor(1.0).expand_as(d_a).to(self.device)
+        gt_label_b = torch.tensor(1.0).expand_as(d_b).to(self.device)
+
+        self.loss_G_A = self.criterionGAN(d_a, gt_label_a)
+        self.loss_G_B = self.criterionGAN(d_b, gt_label_b)
+
+        loss_g = self.loss_idt_A + self.loss_idt_B + self.loss_cycle_A \
+                 + self.loss_cycle_B + self.loss_G_A + self.loss_G_B
+        loss_g.backward()
+
+    def backward_D_basic(self, D, fake_imgs, real_img):
+
+        pred_true = D(real_img)
+        gt_label_true = torch.tensor(1.0).expand_as(pred_true).to(self.device)
+        loss_true = self.criterionGAN(pred_true, gt_label_true)
+
+        pred_fake = D(fake_imgs.detach())
+        gt_label_false = torch.tensor(0.0).expand_as(pred_fake).to(self.device)
+        loss_false = self.criterionGAN(pred_fake, gt_label_false)
+
+        loss_d = (loss_false + loss_true) * 0.5
+        loss_d.backward()
+        return loss_d
 
     def backward_D_A(self):
-        pass
+        # 更新判别器D_A
+        fake_b_pool = self.fake_B_pool.query(self.fake_B)
+        self.loss_D_A = self.backward_D_basic(self.netD_A, fake_b_pool, self.real_B)
 
     def backward_D_B(self):
-        pass
+        # 更新判别器D_B
+        fake_a_pool = self.fake_A_pool.query(self.fake_A)
+        self.loss_D_B = self.backward_D_basic(self.netD_B, fake_a_pool, self.real_A)
 
     def optimizer_parameters(self):
 
@@ -230,7 +299,7 @@ class CycleGAN(nn.Module):
 def get_scheduler(optim, opt):
 
     def adjust_lr(epoch):
-        lr = 1.0 - max(0.0, (epoch + 1 - opt.n_epoch) / opt.n_epoch_decay)
+        lr = 1.0 - max(0.0, (epoch + 1 - opt.n_epoch)) / float(opt.n_epoch_decay)
         return lr
 
     scheduler = optimizer.lr_scheduler.LambdaLR(optim, lr_lambda=adjust_lr)
@@ -266,5 +335,5 @@ def init_weight(net):
             nn.init.normal_(m.weiht, 1.0, 0.02)
             nn.init.zeros_(m.bias)
 
-    print('initialize the network')
+    print(f'initialize the {net.__class__.__name__} network')
     net.apply(init_func)

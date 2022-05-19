@@ -1,6 +1,7 @@
 import random
 
 import torch
+import numpy as np
 import torch.nn as nn
 
 
@@ -37,3 +38,10 @@ class ImagePool():
                     ret_images.append(image)
         ret_images = torch.stack(ret_images, 0)
         return ret_images
+
+
+def tensor2im(images, imtype=np.uint8):
+    image_tensor = images.data
+    image_numpy = image_tensor[0].cpu().float().numpy()
+    image_numpy = (np.transpose(image_numpy, (1, 2, 0))+1) / 2.0 * 255.0
+    return image_numpy.astype(imtype)
