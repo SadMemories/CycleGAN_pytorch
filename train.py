@@ -53,7 +53,10 @@ def train(opt):
 
         model.adjust_learning_rate()
         print('End of epoch %d / %d \t Time Taken: %d sec' % (
-        epoch, opt.n_epochs + opt.n_epochs_decay, time.time() - epoch_start_time))
+        epoch, opt.n_epoch + opt.n_epoch_decay, time.time() - epoch_start_time))
+
+        if (epoch+1) % opt.save_epoch_freq == 0:
+            model.save_networks(epoch)
 
 
 if __name__ == '__main__':
@@ -68,8 +71,8 @@ if __name__ == '__main__':
     parser.add_argument('--gpu-ids', type=str, default='3', help="ie. 0, 1, 2")
     parser.add_argument('--pool-size', type=int, default=50, help='the size of image buffer that '
                                                                   'stores previously generated images')
-    parser.add_argument('--n_epoch', type=int, default=50, help='number of epochs with the initial learning rate')
-    parser.add_argument('--n_epoch_decay', type=int, default=50, help='number of epochs to linearly decay learning '
+    parser.add_argument('--n_epoch', type=int, default=100, help='number of epochs with the initial learning rate')
+    parser.add_argument('--n_epoch_decay', type=int, default=100, help='number of epochs to linearly decay learning '
                                                                       'rate to zero')
     parser.add_argument('--continue_train', action='store_true', help='continue training: load the latest model')
     parser.add_argument('--verbose', action='store_true', help='if specified, print the model structure and parameters')
@@ -104,6 +107,7 @@ if __name__ == '__main__':
 
     # 模型以及结果保存
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
+    parser.add_argument('--save_epoch_freq', type=int, default=10, help='frequency of saving checkpoints at the end of epoch')
 
     opt = parser.parse_args()
 

@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn as nn
 import collections
@@ -26,7 +28,8 @@ class ResnetBlock(nn.Module):
         self.conv_block = nn.Sequential(*conv_block)
 
     def forward(self, x):
-        return x + self.conv_block(x)
+        out = x + self.conv_block(x)
+        return out
 
 
 class ResnetGenerator(nn.Module):
@@ -36,7 +39,7 @@ class ResnetGenerator(nn.Module):
         # self.conv1 = nn.Conv2d(3, 5, kernel_size=3)
         self.generator = []
         self.generator += [nn.ReflectionPad2d(3),
-                           nn.Conv2d(in_c, ngf, kernel_size=7, stride=1),
+                           nn.Conv2d(in_c, ngf, kernel_size=7, stride=1, padding=0, bias=True),
                            norm_layer(ngf),
                            nn.ReLU(inplace=True)]
 
@@ -108,13 +111,16 @@ class PatchDiscriminator(nn.Module):
 
 class CycleGAN(nn.Module):
 
-    def __init__(self, opt, is_train=False):
+    def __init__(self, opt, is_train=False, use_benchmark=True):
         super(CycleGAN, self).__init__()
 
+        self.opt = opt
         # 目前只支持单一的GPU
         self.device = torch.device('cuda:{}'.format(opt.gpu_ids[0])
                                    if torch.cuda.is_available() else 'cpu')
         print(f'using device: {self.device}')
+        if use_benchmark:
+            torch.backends.cudnn.benchmark = True  # 这个在网络结构不变，输入图像大小不变，batch_size不变的情况下会加速训练，同时显存会有一定的增加
         self.is_train = is_train
 
         if opt.norm == "Instance Norm":
@@ -130,6 +136,7 @@ class CycleGAN(nn.Module):
         self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B']
         self.visual_A = ['real_A', 'fake_B', 'rec_A']
         self.visual_B = ['real_B', 'fake_A', 'rec_B']
+        self.model_names = ['G_A', 'G_B', 'D_A', 'D_B']
 
         layer = 3
         if is_train:
@@ -192,6 +199,7 @@ class CycleGAN(nn.Module):
     def set_input(self, inp):
 
         self.real_A = inp['A'].to(self.device)
+        # print(self.real_A.shape)
         self.real_B = inp['B'].to(self.device)
 
     def forward(self):
@@ -295,6 +303,20 @@ class CycleGAN(nn.Module):
         self.backward_D_B()
         self.optimizer_D.step()
 
+    def save_networks(self, epoch):
+
+        for name in self.model_names:
+            if isinstance(name, str):
+                save_name = '%s_%s_net.pth' % (epoch, name)
+                save_path = os.path.join(self.opt.checkpoint_dir, self.opt.name, save_name)
+
+                net = getattr(self, 'net'+name)
+                if len(self.opt.gpu_ids) > 0 and torch.cuda.is_available():
+                    torch.save(net.cpu().state_dict(), save_path)
+                    net.to(self.device)
+                else:
+                    torch.save(net.cpu().state_dict(), save_path)
+
 
 def get_scheduler(optim, opt):
 
@@ -308,6 +330,7 @@ def get_scheduler(optim, opt):
 
 def define_G(in_c, out_c, norm_layer, ngf):
 
+    model = None
     model = ResnetGenerator(in_c, out_c, norm_layer, ngf)
     init_weight(model)
     return model
@@ -315,6 +338,7 @@ def define_G(in_c, out_c, norm_layer, ngf):
 
 def define_D(in_c, layer, norm_layer, ndf):
 
+    model = None
     model = PatchDiscriminator(in_c, layer, norm_layer, ndf)
     init_weight(model)
     return model
@@ -328,12 +352,17 @@ def init_weight(net):
         module_name = m.__class__.__name__
 
         if hasattr(m, 'weight') and (module_name.find('Conv') != -1 or module_name.find('Linear') != -1):
-            nn.init.normal_(m.weight, 0.0, 0.02)
-            if hasattr(m, 'bias'):
-                nn.init.zeros_(m.bias)
+            nn.init.normal_(m.weight.data, 0.0, 0.02)
+            if hasattr(m, 'bias') and m.bias is not None:
+                nn.init.constant_(m.bias.data, 0.0)
         elif module_name.find("BatchNorm2d") != -1:
             nn.init.normal_(m.weiht, 1.0, 0.02)
             nn.init.zeros_(m.bias)
 
-    print(f'initialize the {net.__class__.__name__} network')
     net.apply(init_func)
+
+    num_param = 0
+    for param in net.parameters():
+        num_param += param.numel()
+    print('initialize the %s network, total number of parameters: %.3f M'
+          % (net.__class__.__name__, num_param / 1e6))
