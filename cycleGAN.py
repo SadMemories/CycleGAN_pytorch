@@ -4,8 +4,9 @@ import torch
 import torch.nn as nn
 import collections
 import itertools
+from PIL import Image
 from functools import partial
-from utils import ImagePool
+from utils import ImagePool,tensor2im
 import torch.optim as optimizer
 
 
@@ -107,6 +108,64 @@ class PatchDiscriminator(nn.Module):
 
     def forward(self, x):  # 输入的x是(batch, 3, 256, 256)
         return self.model(x)
+
+
+class TestModel(nn.Module):
+
+    def __init__(self, opt, use_benchmark=True):
+        super(TestModel, self).__init__()
+
+        self.device = torch.device('cuda:{}'.format(opt.gpu_ids[0]) if torch.cuda.is_available() else 'cpu')
+        if use_benchmark:
+            torch.backends.cudnn.benchmark = True
+
+        if opt.norm == "Instance Norm":
+            self.norm = partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
+        elif opt.norm == "Batch Norm":
+            self.norm = partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
+        else:
+            raise NotImplementedError(f'Normalization Layer {self.norm} is not recognized.')
+
+        self.netG = define_G(opt.in_c, opt.out_c, self.norm, opt.ngf).to(self.device)
+        self.model_name = ['G_'+opt.suffix]
+        self.model_path = opt.model_path
+
+    def load_networks(self, opt):
+
+        for name in self.model_name:
+            model_pth = os.path.join(self.model_path, opt.epoch+'_'+name+'_net.pth')
+            assert os.path.exists(model_pth), f"{model_pth} path is not exists..."
+
+            state_dict = torch.load(model_pth, map_location=str(self.device))
+            self.netG.load_state_dict(state_dict)
+
+    def set_input(self, data):
+
+        self.real = data['img'].to(self.device)
+        self.path = data['path'][0]
+
+    def test(self):
+
+        with torch.no_grad():
+            self.forward()
+
+    def forward(self):
+        self.fake = self.netG(self.real)
+
+    def save_result(self, opt):
+        save_path = opt.save_path
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+        fake_save_img = tensor2im(self.fake)
+        real_save_img = tensor2im(self.real)
+        save_img_name = self.path.split('/')[-1].split('.')[0]
+        real_img_path = os.path.join(save_path, '%s_real.png' % save_img_name)
+        fake_img_path = os.path.join(save_path, '%s_fake.png' % save_img_name)
+        fake_image_pil = Image.fromarray(fake_save_img)
+        real_image_pil = Image.fromarray(real_save_img)
+        # h, w, _ = image_numpy.shape
+        real_image_pil.save(real_img_path)
+        fake_image_pil.save(fake_img_path)
 
 
 class CycleGAN(nn.Module):

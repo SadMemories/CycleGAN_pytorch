@@ -32,6 +32,39 @@ def get_transform(opt):
     return trans
 
 
+def get_test_transform(opt):
+
+    trans = transforms.Compose([
+        transforms.Resize(opt.load_size, transforms.InterpolationMode.BICUBIC),
+        transforms.RandomCrop(opt.crop_size),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    ])
+    return trans
+
+
+class SingleDataset(Dataset):
+
+    def __init__(self, opt):
+        super(SingleDataset, self).__init__()
+        root_path = opt.data_path
+        assert os.path.exists(root_path), f'{root_path} path is not exists...'
+
+        self.img_list = get_data(root_path)
+        self.img_len = len(self.img_list)
+        self.transform = get_test_transform(opt)
+
+    def __len__(self):
+        return self.img_len
+
+    def __getitem__(self, item):
+        img_path = self.img_list[item % self.img_len]
+        img = Image.open(img_path).convert('RGB')
+        if self.transform:
+            img = self.transform(img)
+        return {'img': img, 'path': img_path}
+
+
 class MyDataset(Dataset):
 
     def __init__(self, opt):
